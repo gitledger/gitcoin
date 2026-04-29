@@ -17,10 +17,33 @@ jobs:
         with:
           ref: main
 
+      - name: Check if this is a transaction PR
+        id: is_tx
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if echo "$PR_BODY" | grep -q "TX_VERSION"; then
+            echo "is_tx=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_tx=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post success status for non-TX PR
+        if: steps.is_tx.outputs.is_tx == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -f state=success \
+            -f context="validate-tx/validate" \
+            -f description="Not a transaction PR — skipped"
+
       - name: Install Python dependencies
+        if: steps.is_tx.outputs.is_tx == 'true'
         run: pip install cryptography --quiet
 
       - name: Fetch PR changed files
+        if: steps.is_tx.outputs.is_tx == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -28,6 +51,7 @@ jobs:
             > /tmp/pr_files.json
 
       - name: Fetch PR head file contents
+        if: steps.is_tx.outputs.is_tx == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -63,6 +87,7 @@ jobs:
           EOF
 
       - name: Run transaction validation
+        if: steps.is_tx.outputs.is_tx == 'true'
         id: validate
         continue-on-error: true
         env:
@@ -76,7 +101,7 @@ jobs:
           exit ${PIPESTATUS[0]}
 
       - name: Post success status
-        if: steps.validate.outcome == 'success'
+        if: steps.is_tx.outputs.is_tx == 'true' && steps.validate.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -88,7 +113,7 @@ jobs:
           gh pr edit ${{ github.event.pull_request.number }} --remove-label "tx-invalid" 2>/dev/null || true
 
       - name: Post failure status
-        if: steps.validate.outcome == 'failure'
+        if: steps.is_tx.outputs.is_tx == 'true' && steps.validate.outcome == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
